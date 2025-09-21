@@ -1,16 +1,19 @@
-name: Build Vite client & deploy server to Azure Web App
+name: Build Vite client & deploy server to Azure
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
   workflow_dispatch:
 
 env:
   NODE_VERSION: '20.x'
+  VITE_STRIPE_PUBLIC_KEY: ${{ secrets.VITE_STRIPE_PUBLIC_KEY }}
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,38 +22,35 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
 
-      - name: Install dependencies
+      - name: Cache node modules
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.npm
+            client/node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install client dependencies
+        working-directory: client
         run: npm ci
 
-      # IMPORTANT: pass all Vite-time envs here
       - name: Build client (Vite)
+        working-directory: client
+        run: npm run build
         env:
           VITE_STRIPE_PUBLIC_KEY: ${{ secrets.VITE_STRIPE_PUBLIC_KEY }}
-          # add other Vite envs if you have them, e.g.:
-          # VITE_API_BASE: ${{ secrets.VITE_API_BASE }}
-        run: npm run build
 
-      # If you prefer compiling server TS instead of using tsx at runtime, uncomment:
-      # - name: Compile server (tsc)
-      #   run: npx tsc -p server/tsconfig.json
+      - name: Compile server TypeScript
+        run: npm run build --workspace server
 
-      - name: Prepare deploy bundle
-        run: |
-          set -e
-          rm -rf deploy && mkdir -p deploy
-          rsync -a server/ deploy/server/
-          mkdir -p deploy/server/public
-          rsync -a dist/ deploy/server/public/
-          cp -f package.json deploy/
-          if [ -f package-lock.json ]; then cp -f package-lock.json deploy/; fi
-          (cd deploy && npm ci --omit=dev)
-          (cd deploy && zip -r ../app.zip .)
+      - name: Zip server build
+        run: zip -r server-build.zip server-build
 
       - name: Deploy to Azure Web App
-        uses: azure/webapps-deploy@v3
+        uses: azure/webapps-deploy@v2
         with:
           app-name: kidzaimathapp30237
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
-          package: app.zip
+          package: server-build.zip
