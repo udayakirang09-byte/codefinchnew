@@ -1,18 +1,41 @@
-name: Build root Vite & Deploy server to Azure
+name: Build Vite client & deploy server to Azure Web App
+
 on:
-  push: { branches: [ "main" ] }
+  push:
+    branches: [ "main" ]
   workflow_dispatch:
+
+env:
+  NODE_VERSION: '20.x'
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '18', cache: 'npm' }
-      - name: Install deps
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
         run: npm ci
-      - name: Build (root Vite -> ./dist)
+
+      # IMPORTANT: pass all Vite-time envs here
+      - name: Build client (Vite)
+        env:
+          VITE_STRIPE_PUBLIC_KEY: ${{ secrets.VITE_STRIPE_PUBLIC_KEY }}
+          # add other Vite envs if you have them, e.g.:
+          # VITE_API_BASE: ${{ secrets.VITE_API_BASE }}
         run: npm run build
+
+      # If you prefer compiling server TS instead of using tsx at runtime, uncomment:
+      # - name: Compile server (tsc)
+      #   run: npx tsc -p server/tsconfig.json
+
       - name: Prepare deploy bundle
         run: |
           set -e
@@ -22,9 +45,10 @@ jobs:
           rsync -a dist/ deploy/server/public/
           cp -f package.json deploy/
           if [ -f package-lock.json ]; then cp -f package-lock.json deploy/; fi
-          (cd deploy && npm ci)
+          (cd deploy && npm ci --omit=dev)
           (cd deploy && zip -r ../app.zip .)
-      - name: Deploy to Azure
+
+      - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: kidzaimathapp30237
