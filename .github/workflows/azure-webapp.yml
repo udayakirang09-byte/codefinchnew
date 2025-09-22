@@ -53,8 +53,8 @@ jobs:
       - name: Install production deps inside server-build
         run: |
           mkdir -p server-build/server
-          cp server/package.json server-build/server/
-          if [ -f server/package-lock.json ]; then cp server/package-lock.json server-build/server/; fi
+          cp package.json server-build/server/
+          if [ -f package-lock.json ]; then cp package-lock.json server-build/server/; fi
           cd server-build/server
           npm ci --omit=dev
 
