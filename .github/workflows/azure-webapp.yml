@@ -46,7 +46,8 @@ jobs:
         run: |
           set -eu
           mkdir -p server-build/public
-          rsync -a --delete client/dist/public/ server-build/public/
+          # IMPORTANT: vite writes to ../dist/public from inside client/, i.e. dist/public at repo root
+          rsync -a --delete dist/public/ server-build/public/
 
       # Sanity check to avoid shipping another "missing key" build
       - name: Verify Stripe key got baked into client bundle
@@ -94,7 +95,7 @@ jobs:
           test -f server-build/node_modules/tsx/package.json || { echo "tsx missing in deploy package"; exit 1; }
           test -f server-build/node_modules/esbuild/package.json || { echo "esbuild missing in deploy package"; exit 1; }
 
-      # NEW: make tsx (and all runtime deps) available at the app root for `npm start`
+      # Make tsx (and all runtime deps) available at the app root for `npm start`
       - name: Make runtime node_modules available at app root
         shell: bash
         run: |
