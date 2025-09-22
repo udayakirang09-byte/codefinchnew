@@ -46,7 +46,6 @@ jobs:
         run: |
           set -eu
           mkdir -p server-build/public
-          # Vite (run from client/) emits to ../dist/public => repo-root/dist/public
           rsync -a --delete dist/public/ server-build/public/
 
       # Sanity check to avoid shipping another "missing key" build
@@ -60,7 +59,7 @@ jobs:
           fi
           echo "Stripe key baked into client bundle."
 
-      # ---------- Server (run TS via TSX; no compile step) ----------
+      # ---------- Server (TS sources for TSX runtime) ----------
       - name: Install server deps (root)
         working-directory: .
         run: npm ci
@@ -72,9 +71,7 @@ jobs:
           set -eu
           echo "Skipping TS compile; deploying TS sources to run via TSX"
           mkdir -p server-build/server
-          # Copy ALL server sources (so entry server/index.ts exists at runtime)
           rsync -a --delete server/ server-build/server/
-          # Include tsconfig for TSX
           if [ -f tsconfig.json ]; then cp tsconfig.json server-build/; fi
 
       # ---------- Runtime deps inside server-build ----------
@@ -82,7 +79,6 @@ jobs:
         shell: bash
         run: |
           set -eu
-          # Use root package.json (must include "start": "tsx server/index.ts" and deps incl. tsx, express, etc.)
           cp package.json server-build/
           if [ -f package-lock.json ]; then
             cp package-lock.json server-build/
@@ -91,14 +87,20 @@ jobs:
             echo "No package-lock.json found — using npm install fallback"
             cd server-build && npm install --omit=dev
           fi
+          # ✅ ensure esbuild’s binary is present (safe no-op if OK)
+          cd server-build
+          npx esbuild --version || npm rebuild esbuild
+          # ✅ sanity checks: fail build if deps are missing
+          test -f node_modules/tsx/package.json || { echo "tsx missing in deploy package"; exit 1; }
+          test -f node_modules/esbuild/package.json || { echo "esbuild missing in deploy package"; exit 1; }
 
       # ---------- Package & Deploy ----------
       - name: Create deployment package (ZIP)
         shell: bash
         run: |
           set -eu
-          # Optional sanity: ensure main entry exists
-          [ -f server-build/server/index.ts ] || { echo "Missing server-build/server/index.ts"; exit 1; }
+          [ -f server-build/public/index.html ] || { echo "public/index.html missing"; exit 1; }
+          [ -f server-build/server/index.ts ] || { echo "server/index.ts missing"; exit 1; }
           cd server-build
           zip -r ../app.zip .
 
