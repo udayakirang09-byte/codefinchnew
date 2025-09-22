@@ -47,7 +47,7 @@ jobs:
       # ------- SERVER -------
       # Remove any workspace usage; compile server directly with TSC
       - name: Compile server TypeScript
-        run: npx tsc -p server/tsconfig.json
+        run: npx tsc -p tsconfig.json
 
       # Prepare server runtime deps inside the compiled output
       - name: Install production deps inside server-build
