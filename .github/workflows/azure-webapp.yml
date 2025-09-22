@@ -75,7 +75,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          mkdir -p server-build              # <-- 🔧 THIS IS THE FIX
+          mkdir -p server-build                 # ✅ FIX: ensures dir exists
           cp package.json server-build/
           if [ -f package-lock.json ]; then
             cp package-lock.json server-build/
