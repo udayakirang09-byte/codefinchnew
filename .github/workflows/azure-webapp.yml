@@ -46,6 +46,7 @@ jobs:
         run: |
           set -eu
           mkdir -p server-build/public
+          # Vite (run from client/) emits to ../dist/public => repo-root/dist/public
           rsync -a --delete dist/public/ server-build/public/
 
       # Sanity check to avoid shipping another "missing key" build
@@ -59,52 +60,45 @@ jobs:
           fi
           echo "Stripe key baked into client bundle."
 
-      # ---------- Build SERVER (TypeScript → JS) ----------
-      - name: Install server deps
+      # ---------- Server (run TS via TSX; no compile step) ----------
+      - name: Install server deps (root)
         working-directory: .
         run: npm ci
 
-      - name: Compile server TypeScript
+      - name: Collect server sources (TS) for TSX runtime
         working-directory: .
         shell: bash
         run: |
           set -eu
-          # Prefer your package script if present; fallback to tsc
-          if false; then
-            echo skip
-          else
-            echo "Skipping server TS compile (using server/public runtime JS)"
-          fi
-
-          # Make sure compiled JS ends up in ../server-build/server
-          cd .
+          echo "Skipping TS compile; deploying TS sources to run via TSX"
           mkdir -p server-build/server
-
-          # If your server build outputs to server/dist or server/build, copy it over.
-          # Adjust if your repo uses a different output folder.
-          if [ -d server/public ]; then rsync -a --delete server/public/ server-build/server/public/; fi
-          if [ -d server/build ]; then rsync -a --delete server/build/ server-build/server/; fi
-          # If compiled JS is in-place (e.g., outDir points directly), copy *.js as a fallback:
-          if [ -z "$(ls -A server-build/server)" ]; then
-            find server -type f -name '*.js' -not -path 'server-build/*' -exec rsync -R {} server-build/server/ \;
-          fi
+          # Copy ALL server sources (so entry server/index.ts exists at runtime)
+          rsync -a --delete server/ server-build/server/
+          # Include tsconfig for TSX
+          if [ -f tsconfig.json ]; then cp tsconfig.json server-build/; fi
 
       # ---------- Runtime deps inside server-build ----------
       - name: Install production dependencies into server-build
         shell: bash
         run: |
           set -eu
-          # Copy the root package.json (or server one if you split packages)
-          # Use the one your runtime expects. Root is common if it defines "dependencies".
+          # Use root package.json (must include "start": "tsx server/index.ts" and deps incl. tsx, express, etc.)
           cp package.json server-build/
-          cd server-build
-          npm ci --omit=dev
+          if [ -f package-lock.json ]; then
+            cp package-lock.json server-build/
+            cd server-build && npm ci --omit=dev
+          else
+            echo "No package-lock.json found — using npm install fallback"
+            cd server-build && npm install --omit=dev
+          fi
 
       # ---------- Package & Deploy ----------
       - name: Create deployment package (ZIP)
         shell: bash
         run: |
           set -eu
+          # Optional sanity: ensure main entry exists
+          [ -f server-build/server/index.ts ] || { echo "Missing server-build/server/index.ts"; exit 1; }
           cd server-build
           zip -r ../app.zip .
 
