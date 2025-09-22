@@ -46,7 +46,7 @@ jobs:
         run: |
           set -eu
           mkdir -p server-build/public
-          rsync -a --delete dist/public/ server-build/public/
+          rsync -a --delete client/dist/public/ server-build/public/
 
       # Sanity check to avoid shipping another "missing key" build
       - name: Verify Stripe key got baked into client bundle
@@ -88,11 +88,18 @@ jobs:
             echo "No package-lock.json found — using npm install fallback"
             cd server-build && npm install --omit=dev
           fi
-          # (Removed the redundant "cd server-build" here)
-          npx esbuild --version || npm rebuild esbuild
+          # Ensure esbuild’s platform binary is present (safe no-op if OK)
+          npx --prefix server-build esbuild --version || (cd server-build && npm rebuild esbuild)
           # Sanity checks: fail build if deps are missing
-          test -f node_modules/tsx/package.json || { echo "tsx missing in deploy package"; exit 1; }
-          test -f node_modules/esbuild/package.json || { echo "esbuild missing in deploy package"; exit 1; }
+          test -f server-build/node_modules/tsx/package.json || { echo "tsx missing in deploy package"; exit 1; }
+          test -f server-build/node_modules/esbuild/package.json || { echo "esbuild missing in deploy package"; exit 1; }
+
+      # NEW: make tsx (and all runtime deps) available at the app root for `npm start`
+      - name: Make runtime node_modules available at app root
+        shell: bash
+        run: |
+          set -eu
+          rsync -a --delete server-build/node_modules/ ./node_modules/
 
       # ---------- Package & Deploy ----------
       - name: Create deployment package (ZIP)
