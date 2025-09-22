@@ -79,6 +79,7 @@ jobs:
         shell: bash
         run: |
           set -eu
+          mkdir -p server-build
           cp package.json server-build/
           if [ -f package-lock.json ]; then
             cp package-lock.json server-build/
@@ -87,10 +88,10 @@ jobs:
             echo "No package-lock.json found — using npm install fallback"
             cd server-build && npm install --omit=dev
           fi
-          # ✅ ensure esbuild’s binary is present (safe no-op if OK)
+          # Ensure esbuild’s platform binary is present (safe no-op if OK)
           cd server-build
           npx esbuild --version || npm rebuild esbuild
-          # ✅ sanity checks: fail build if deps are missing
+          # Sanity checks: fail build if deps are missing
           test -f node_modules/tsx/package.json || { echo "tsx missing in deploy package"; exit 1; }
           test -f node_modules/esbuild/package.json || { echo "esbuild missing in deploy package"; exit 1; }
 
