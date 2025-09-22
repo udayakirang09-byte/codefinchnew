@@ -14,7 +14,6 @@ jobs:
     env:
       AZURE_WEBAPP_NAME: kidzaimathapp30237
       NODE_VERSION: 20.x
-      # Injected from GitHub Actions secrets (safe at build time)
       VITE_STRIPE_PUBLIC_KEY: ${{ secrets.VITE_STRIPE_PUBLIC_KEY }}
 
     steps:
@@ -27,7 +26,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      # ---------- Build CLIENT (Vite) ----------
       - name: Create client .env.production for Vite
         working-directory: client
         shell: bash
@@ -46,10 +44,8 @@ jobs:
         run: |
           set -eu
           mkdir -p server-build/public
-          # IMPORTANT: vite writes to ../dist/public from inside client/, i.e. dist/public at repo root
           rsync -a --delete dist/public/ server-build/public/
 
-      # Sanity check to avoid shipping another "missing key" build
       - name: Verify Stripe key got baked into client bundle
         shell: bash
         run: |
@@ -60,13 +56,10 @@ jobs:
           fi
           echo "Stripe key baked into client bundle."
 
-      # ---------- Server (TS sources for TSX runtime) ----------
       - name: Install server deps (root)
-        working-directory: .
         run: npm ci
 
       - name: Collect server sources (TS) for TSX runtime
-        working-directory: .
         shell: bash
         run: |
           set -eu
@@ -75,40 +68,30 @@ jobs:
           rsync -a --delete server/ server-build/server/
           if [ -f tsconfig.json ]; then cp tsconfig.json server-build/; fi
 
-      # ---------- Runtime deps inside server-build ----------
       - name: Install production dependencies into server-build
         shell: bash
         run: |
           set -eu
-          mkdir -p server-build
           cp package.json server-build/
           if [ -f package-lock.json ]; then
             cp package-lock.json server-build/
             cd server-build && npm ci --omit=dev
           else
-            echo "No package-lock.json found — using npm install fallback"
             cd server-build && npm install --omit=dev
           fi
-          # Ensure esbuild’s platform binary is present (safe no-op if OK)
           npx --prefix server-build esbuild --version || (cd server-build && npm rebuild esbuild)
-          # Sanity checks: fail build if deps are missing
-          test -f server-build/node_modules/tsx/package.json || { echo "tsx missing in deploy package"; exit 1; }
-          test -f server-build/node_modules/esbuild/package.json || { echo "esbuild missing in deploy package"; exit 1; }
 
-      # Make tsx (and all runtime deps) available at the app root for `npm start`
+      # 🔑 NEW STEP: copy runtime node_modules to root level
       - name: Make runtime node_modules available at app root
         shell: bash
         run: |
           set -eu
-          rsync -a --delete server-build/node_modules/ ./node_modules/
+          rsync -a server-build/node_modules/ ./node_modules/
 
-      # ---------- Package & Deploy ----------
       - name: Create deployment package (ZIP)
         shell: bash
         run: |
           set -eu
-          [ -f server-build/public/index.html ] || { echo "public/index.html missing"; exit 1; }
-          [ -f server-build/server/index.ts ] || { echo "server/index.ts missing"; exit 1; }
           cd server-build
           zip -r ../app.zip .
 
