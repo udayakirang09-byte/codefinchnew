@@ -1,4 +1,4 @@
-name: Deploy (build client, compile server, zip server-build, deploy)
+name: Azure Web App Deploy
 
 on:
   push:
@@ -6,15 +6,12 @@ on:
   workflow_dispatch:
 
 env:
+  AZURE_WEBAPP_NAME: kidzaimathapp30237       # <-- your web app name
   NODE_VERSION: '20.x'
-  # This is read during the client build. Do not print it in logs.
-  VITE_STRIPE_PUBLIC_KEY: ${{ secrets.VITE_STRIPE_PUBLIC_KEY }}
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
 
     steps:
       - name: Checkout
@@ -26,55 +23,48 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Debug env (masked)
-        run: |
-          echo "Node $(node -v)"
-          if [ -n "${{ secrets.VITE_STRIPE_PUBLIC_KEY }}" ]; then
-            echo "Stripe public key present."
-          else
-            echo "WARNING: Stripe public key is NOT set."
-          fi
-
-      # ------- CLIENT -------
-      - name: Install client dependencies
-        working-directory: ./client
+      # --- Install root dependencies
+      - name: Install root deps
         run: npm ci
 
+      # --- Build client with the Stripe publishable key
       - name: Build client (Vite)
-        working-directory: ./client
-        run: npm run build
+        env:
+          # This must be present at build time; value comes from GitHub Secrets
+          VITE_STRIPE_PUBLIC_KEY: ${{ secrets.VITE_STRIPE_PUBLIC_KEY }}
+        run: |
+          # Optional: fail fast if secret is empty
+          if [ -z "${VITE_STRIPE_PUBLIC_KEY}" ]; then
+            echo "VITE_STRIPE_PUBLIC_KEY is empty. Add it as a GitHub Actions secret."
+            exit 1
+          fi
+          npm run build
+          # Vite outputs to dist/public (per your logs)
 
-      # ------- SERVER -------
-      # Remove any workspace usage; compile server directly with TSC
+      # --- Compile server TypeScript to server-build/
       - name: Compile server TypeScript
-        run: npx tsc -p tsconfig.json
+        run: |
+          npm run build:server
+          # Ensure the server-build/public contains the client build
+          rsync -a --delete dist/public/ server-build/public/
 
-      # Prepare server runtime deps inside the compiled output
+      # --- Install production deps in server-build/
       - name: Install production deps inside server-build
         run: |
-          mkdir -p server-build/server
-          cp package.json server-build/server/
-          if [ -f package-lock.json ]; then cp package-lock.json server-build/server/; fi
-          cd server-build/server
-          npm ci --omit=dev
+          # Copy the root package.json (or your server package.json if you keep a separate one)
+          cp package.json server-build/
+          npm ci --omit=dev --prefix server-build
 
-      # ------- PACKAGE -------
+      # --- Create a deployment package
       - name: Create deployment package
         run: |
-          mkdir -p server-build/public
-          # copy client assets produced by Vite
-          rsync -a --delete dist/public/ server-build/public/
-          # zip only server-build
-          zip -r deploy.zip server-build
+          cd server-build
+          zip -r ../server-build.zip .
 
-      # ------- DEPLOY -------
+      # --- Deploy to Azure Web App
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
-          app-name: kidzaimathapp30237
-          package: deploy.zip
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
-
-      - name: Post Setup Node 20.x
-        if: always()
-        run: echo "Deployment step finished."
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_PUBLISH_PROFILE }}
+          package: server-build.zip
