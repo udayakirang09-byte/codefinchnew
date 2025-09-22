@@ -1,70 +1,116 @@
-name: Azure Web App Deploy
+name: azure-webapp
 
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
 
-env:
-  AZURE_WEBAPP_NAME: kidzaimathapp30237       # <-- your web app name
-  NODE_VERSION: '20.x'
+permissions:
+  contents: read
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
+    env:
+      AZURE_WEBAPP_NAME: kidzaimathapp30237
+      NODE_VERSION: 20.x
+      # Injected from GitHub Actions secrets (safe at build time)
+      VITE_STRIPE_PUBLIC_KEY: ${{ secrets.VITE_STRIPE_PUBLIC_KEY }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node ${{ env.NODE_VERSION }}
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      # --- Install root dependencies
-      - name: Install root deps
-        run: npm ci
-
-      # --- Build client with the Stripe publishable key
-      - name: Build client (Vite)
-        env:
-          # This must be present at build time; value comes from GitHub Secrets
-          VITE_STRIPE_PUBLIC_KEY: ${{ secrets.VITE_STRIPE_PUBLIC_KEY }}
+      # ---------- Build CLIENT (Vite) ----------
+      - name: Create client .env.production for Vite
+        working-directory: client
+        shell: bash
         run: |
-          # Optional: fail fast if secret is empty
-          if [ -z "${VITE_STRIPE_PUBLIC_KEY}" ]; then
-            echo "VITE_STRIPE_PUBLIC_KEY is empty. Add it as a GitHub Actions secret."
+          set -eu
+          printf "VITE_STRIPE_PUBLIC_KEY=%s\n" "$VITE_STRIPE_PUBLIC_KEY" > .env.production
+
+      - name: Install client deps & build (Vite)
+        working-directory: client
+        run: |
+          npm ci
+          npm run build
+
+      - name: Stage client build into server-build/public
+        shell: bash
+        run: |
+          set -eu
+          mkdir -p server-build/public
+          rsync -a --delete client/dist/ server-build/public/
+
+      # Sanity check to avoid shipping another "missing key" build
+      - name: Verify Stripe key got baked into client bundle
+        shell: bash
+        run: |
+          set -eu
+          if grep -R "VITE_STRIPE_PUBLIC_KEY" -n server-build/public 2>/dev/null; then
+            echo "Stripe key placeholder still present in bundle."
             exit 1
           fi
-          npm run build
-          # Vite outputs to dist/public (per your logs)
+          echo "Stripe key baked into client bundle."
 
-      # --- Compile server TypeScript to server-build/
+      # ---------- Build SERVER (TypeScript → JS) ----------
+      - name: Install server deps
+        working-directory: server
+        run: npm ci
+
       - name: Compile server TypeScript
+        working-directory: server
+        shell: bash
         run: |
-          npm run build:server
-          # Ensure the server-build/public contains the client build
-          rsync -a --delete dist/public/ server-build/public/
+          set -eu
+          # Prefer your package script if present; fallback to tsc
+          if npm run | grep -q "^  build"; then
+            npm run build
+          else
+            npx tsc -p tsconfig.json
+          fi
 
-      # --- Install production deps in server-build/
-      - name: Install production deps inside server-build
+          # Make sure compiled JS ends up in ../server-build/server
+          cd ..
+          mkdir -p server-build/server
+
+          # If your server build outputs to server/dist or server/build, copy it over.
+          # Adjust if your repo uses a different output folder.
+          if [ -d server/dist ]; then rsync -a --delete server/dist/ server-build/server/; fi
+          if [ -d server/build ]; then rsync -a --delete server/build/ server-build/server/; fi
+          # If compiled JS is in-place (e.g., outDir points directly), copy *.js as a fallback:
+          if [ -z "$(ls -A server-build/server)" ]; then
+            find server -type f -name '*.js' -not -path 'server-build/*' -exec rsync -R {} server-build/server/ \;
+          fi
+
+      # ---------- Runtime deps inside server-build ----------
+      - name: Install production dependencies into server-build
+        shell: bash
         run: |
-          # Copy the root package.json (or your server package.json if you keep a separate one)
+          set -eu
+          # Copy the root package.json (or server one if you split packages)
+          # Use the one your runtime expects. Root is common if it defines "dependencies".
           cp package.json server-build/
-          npm ci --omit=dev --prefix server-build
-
-      # --- Create a deployment package
-      - name: Create deployment package
-        run: |
           cd server-build
-          zip -r ../server-build.zip .
+          npm ci --omit=dev
 
-      # --- Deploy to Azure Web App
+      # ---------- Package & Deploy ----------
+      - name: Create deployment package (ZIP)
+        shell: bash
+        run: |
+          set -eu
+          cd server-build
+          zip -r ../app.zip .
+
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          publish-profile: ${{ secrets.AZURE_PUBLISH_PROFILE }}
-          package: server-build.zip
+          package: app.zip
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
