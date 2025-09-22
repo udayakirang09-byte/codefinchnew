@@ -14,6 +14,7 @@ jobs:
     env:
       AZURE_WEBAPP_NAME: kidzaimathapp30237
       NODE_VERSION: 20.x
+      # Injected from GitHub Actions secrets (safe at build time)
       VITE_STRIPE_PUBLIC_KEY: ${{ secrets.VITE_STRIPE_PUBLIC_KEY }}
 
     steps:
@@ -47,6 +48,7 @@ jobs:
           mkdir -p server-build/public
           rsync -a --delete dist/public/ server-build/public/
 
+      # Sanity check to avoid shipping another "missing key" build
       - name: Verify Stripe key got baked into client bundle
         shell: bash
         run: |
@@ -59,9 +61,11 @@ jobs:
 
       # ---------- Server (TS sources for TSX runtime) ----------
       - name: Install server deps (root)
+        working-directory: .
         run: npm ci
 
       - name: Collect server sources (TS) for TSX runtime
+        working-directory: .
         shell: bash
         run: |
           set -eu
@@ -75,7 +79,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          mkdir -p server-build                 # ✅ FIX: ensures dir exists
+          mkdir -p server-build
           cp package.json server-build/
           if [ -f package-lock.json ]; then
             cp package-lock.json server-build/
@@ -84,8 +88,9 @@ jobs:
             echo "No package-lock.json found — using npm install fallback"
             cd server-build && npm install --omit=dev
           fi
-          cd server-build
+          # (Removed the redundant "cd server-build" here)
           npx esbuild --version || npm rebuild esbuild
+          # Sanity checks: fail build if deps are missing
           test -f node_modules/tsx/package.json || { echo "tsx missing in deploy package"; exit 1; }
           test -f node_modules/esbuild/package.json || { echo "esbuild missing in deploy package"; exit 1; }
 
